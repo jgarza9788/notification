@@ -50,29 +50,41 @@ Panel {
   // goes through its IPC target: `omarchy-shell notifications ...`.
 
   property bool dnd: false
+  property int dndEpoch: 0     // bumped by every local toggle
+  property int dndQueued: 0    // toggles pressed while a call was in flight
 
   // Reads come back as "on"/"off"; so does toggleDnd, so one parser serves both.
+  // A reply to a call made before the latest toggle is stale: applying it
+  // would flip the bell back until the toggle's own reply arrived.
   Process {
     id: dndProc
+    property int epoch: 0
     stdout: StdioCollector {
       onStreamFinished: {
         var v = text.trim()
+        if (dndProc.epoch !== root.dndEpoch) return
         if (v === "on" || v === "off") root.dnd = v === "on"
       }
     }
+    onExited: if (root.dndQueued > 0) Qt.callLater(function() {
+      root.dndQueued--
+      root.dndCall("toggleDnd")
+    })
   }
 
   function dndCall(method) {
     if (dndProc.running) {
-      if (method === "toggleDnd") Qt.callLater(function() { root.dndCall(method) })
+      if (method === "toggleDnd") dndQueued++
       return
     }
+    dndProc.epoch = dndEpoch
     dndProc.command = ["omarchy-shell", "notifications", method]
     dndProc.running = true
   }
 
   function toggleDnd() {
     dnd = !dnd   // answer the key press now; the IPC reply confirms it
+    dndEpoch++
     dndCall("toggleDnd")
     // The bar's own DND indicator only re-reads on refresh.
     Quickshell.execDetached(["omarchy-shell", "-q", "omarchy.indicators", "refresh"])
@@ -91,29 +103,45 @@ Panel {
   // Keys of toasts still on screen, newest first (from `notification-store live`).
   property var live: []
 
+  // Callbacks wait for a fresh answer: one asked for mid-run waits for the
+  // next run, since the toast may have expired since this one started.
   Process {
     id: liveProc
-    property var then: null
+    property var then: []      // callbacks for this run
+    property var waiting: []   // callbacks for the next run
+    property bool again: false
     stdout: StdioCollector {
       onStreamFinished: {
         var keys = []
         try { keys = JSON.parse(text) } catch (e) {}
         root.live = Array.isArray(keys) ? keys : []
-        var cb = liveProc.then
-        liveProc.then = null
-        if (cb) cb()
+        var cbs = liveProc.then
+        liveProc.then = []
+        for (var i = 0; i < cbs.length; i++) cbs[i]()
       }
+    }
+    onExited: if (again) {
+      again = false
+      var cbs = waiting
+      waiting = []
+      Qt.callLater(function() { root.runLive(cbs) })
     }
   }
 
-  function refreshLive(then) {
-    if (liveProc.running) {
-      if (then) Qt.callLater(function() { root.refreshLive(then) })
-      return
-    }
-    liveProc.then = then || null
+  function runLive(cbs) {
+    liveProc.then = cbs
     liveProc.command = store(["live"])
     liveProc.running = true
+  }
+
+  function refreshLive(then) {
+    var cbs = then ? [then] : []
+    if (liveProc.running) {
+      liveProc.again = true
+      liveProc.waiting = liveProc.waiting.concat(cbs)
+      return
+    }
+    runLive(cbs)
   }
 
   // ------------------------------------------------------------------- state
@@ -164,6 +192,7 @@ Panel {
 
   Process {
     id: watchProc
+    property bool restartNow: false
     command: root.store(["watch"])
     environment: root.storeEnv
     running: true
@@ -171,7 +200,38 @@ Panel {
       onRead: function(line) { root.absorb(line) }
     }
     // Restart a watcher that died, slowly, so a broken one can't spin.
-    onExited: restartWatch.restart()
+    onExited: {
+      if (restartNow) {
+        restartNow = false
+        Qt.callLater(function() { watchProc.running = true })
+      } else {
+        restartWatch.restart()
+      }
+    }
+  }
+
+  // The watcher reads the retention limits from its environment once, at
+  // start, so restart it when they change (after a slider settles).
+  onStoreEnvChanged: envSettle.restart()
+
+  Timer {
+    id: envSettle
+    interval: 1000
+    onTriggered: {
+      if (watchProc.running) {
+        watchProc.restartNow = true
+        watchProc.running = false
+      } else {
+        watchProc.running = true
+      }
+    }
+  }
+
+  // The archive or seen mark changed, maybe from the bar on another monitor.
+  Timer {
+    id: syncSoon
+    interval: 250
+    onTriggered: { root.load(); root.readSeen() }
   }
 
   Timer {
@@ -180,8 +240,13 @@ Panel {
     onTriggered: if (!watchProc.running) watchProc.running = true
   }
 
+  function keysOf(list) {
+    return list.map(function(e) { return e.key }).join(",")
+  }
+
   Process {
     id: listProc
+    property bool again: false
     environment: root.storeEnv
     stdout: StdioCollector {
       onStreamFinished: {
@@ -189,22 +254,24 @@ Panel {
         try { data = JSON.parse(text) } catch (e) { return }
         if (!Array.isArray(data)) return
         root.loaded = true
-        var same = data.length === root.entries.length &&
-                   (data.length === 0 || data[0].key === root.entries[0].key)
+        var same = root.keysOf(data) === root.keysOf(root.entries)
         root.entries = data
         if (!same) root.rebuild()
       }
     }
+    // A change that landed mid-read gets a read of its own.
+    onExited: if (again) { again = false; Qt.callLater(root.load) }
   }
 
   function load() {
-    if (listProc.running) return
+    if (listProc.running) { listProc.again = true; return }
     listProc.command = store(["list", String(maxItems)])
     listProc.running = true
   }
 
   Process {
     id: seenProc
+    property bool again: false
     environment: root.storeEnv
     stdout: StdioCollector {
       onStreamFinished: {
@@ -214,6 +281,13 @@ Panel {
         } catch (e) {}
       }
     }
+    onExited: if (again) { again = false; Qt.callLater(root.readSeen) }
+  }
+
+  function readSeen() {
+    if (seenProc.running) { seenProc.again = true; return }
+    seenProc.command = store(["seen"])
+    seenProc.running = true
   }
 
   function markSeen() {
@@ -225,6 +299,7 @@ Panel {
   function absorb(line) {
     var entry
     try { entry = JSON.parse(line) } catch (e) { return }
+    if (entry && entry.changed) { syncSoon.restart(); return }
     if (!entry || !entry.key) return
     for (var i = 0; i < entries.length; i++)
       if (entries[i].key === entry.key) return
@@ -409,20 +484,18 @@ Panel {
   // ---------------------------------------------------------------- lifecycle
 
   Component.onCompleted: {
-    seenProc.command = store(["seen"])
-    seenProc.running = true
+    readSeen()
     load()
     refreshLive()
   }
 
   // ---------------------------------------------------------------- slide-in
   //
-  // KeyboardPanel only fades its card. The card is this content's
-  // grandparent (keys -> contentHolder -> card), so a Translate is attached
-  // to it and the whole panel slides in from the right edge. If the shell
-  // ever restructures that, it falls back to sliding just the contents.
+  // KeyboardPanel fades its card in; the contents slide in from the right
+  // inside it. Only this plugin's own items move: the card belongs to the
+  // shell and is left alone.
   readonly property int slideMs: Math.max(0, Number(setting("animationMs", 240)) || 0)
-  readonly property real slideDistance: popup.contentWidth + Style.space(40)
+  readonly property real slideDistance: popup.contentWidth
 
   Translate { id: slide; x: 0 }
 
@@ -430,12 +503,6 @@ Panel {
     id: slideAnim
     target: slide
     property: "x"
-  }
-
-  function attachSlide() {
-    var card = keys.parent ? keys.parent.parent : null
-    var target = card && card !== popup && card.width === popup.contentWidth ? card : keys
-    target.transform = [slide]
   }
 
   function slideTo(x, easing, ms) {
@@ -501,15 +568,30 @@ Panel {
     }
   }
 
-  // The panel hangs from a point far past the right edge; KeyboardPanel clamps
-  // the card inside the screen, so it always sits against the right edge.
+  // KeyboardPanel centres the card under its anchor, so the anchor goes where
+  // that centre puts the card flush against the right edge: margin in from the
+  // screen edge, half a card further left. Coordinates are the bar window's,
+  // as KeyboardPanel uses. Until the window is known, a point far past the edge
+  // gets the same result from KeyboardPanel keeping the card on screen.
+  TransformWatcher {
+    id: barWatcher
+    a: root.QsWindow.window ? root.QsWindow.window.contentItem : null
+    b: root
+  }
+
   Item {
     id: rightAnchor
     anchors.top: button.top
     anchors.bottom: button.bottom
-    x: 1000000
     width: 1
     visible: false
+    x: {
+      barWatcher.transform  // reactive dependency: the widget moving on the bar
+      var win = root.QsWindow.window
+      if (!win || popup.screenW <= 0) return 1000000
+      var centre = popup.screenW - popup.margin - popup.contentWidth / 2
+      return root.mapFromItem(win.contentItem, centre, 0).x - width / 2
+    }
   }
 
   Rectangle {
@@ -564,7 +646,7 @@ Panel {
       id: keys
       anchors.fill: parent
       focus: true
-      Component.onCompleted: root.attachSlide()
+      clip: true   // the sliding contents stay inside the card
       Keys.priority: Keys.BeforeItem
       Keys.onPressed: function(event) {
         var name = root.keyName(event)
@@ -589,6 +671,7 @@ Panel {
         id: content
         anchors.fill: parent
         spacing: Style.space(8)
+        transform: slide
 
         // ------------------------------------------------------- header
 
@@ -842,11 +925,22 @@ Panel {
 
   // ---------------------------------------------------------------- testing
   //
+  // Off unless the flag file exists when the shell starts (it can seed fake
+  // entries and press keys):
+  //   touch ~/.local/state/jgarza-notification/test-ipc && omarchy-restart-shell
   //   omarchy-shell jgarza.notification.test state
   //   omarchy-shell jgarza.notification.test seed 20
   //   omarchy-shell jgarza.notification.test key down|up|enter|search|dnd|clear|remove|escape
+  FileView {
+    id: testFlag
+    path: (Quickshell.env("XDG_STATE_HOME") || Quickshell.env("HOME") + "/.local/state")
+          + "/jgarza-notification/test-ipc"
+    printErrors: false
+  }
+
   IpcHandler {
     target: "jgarza.notification.test"
+    enabled: testFlag.loaded
 
     function state(): string {
       return JSON.stringify({
@@ -862,7 +956,6 @@ Panel {
         unread: root.unread,
         live: root.live,
         watching: watchProc.running,
-        slideOn: keys.transform.length > 0 ? "contents" : "card",
         slideX: slide.x
       })
     }

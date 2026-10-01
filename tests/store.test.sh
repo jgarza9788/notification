@@ -42,6 +42,9 @@ sleep 1
 printf '{"id":4,"originalId":4,"app":"Signal","summary":"four","timestamp":%s}\n' "$now" > "$NS_SRC_DIR/$now-4.json"
 for _ in 1 2 3 4 5 6 7 8 9 10; do grep -q '"four"' "$tmp/watch.out" && break; sleep 0.3; done
 ok "watch emits new entry" 'grep -q "\"summary\":\"four\"" "$tmp/watch.out"'
+"$store_bin" seen 777 >/dev/null
+for _ in 1 2 3 4 5 6 7 8 9 10; do grep -q '"changed"' "$tmp/watch.out" && break; sleep 0.3; done
+ok "watch reports store changes" 'grep -q "\"changed\":true" "$tmp/watch.out"'
 kill "$watch_pid" 2>/dev/null; wait "$watch_pid" 2>/dev/null
 ok "watch archived it" '[[ $("$store_bin" list | jq length) == 3 ]]'
 
@@ -68,6 +71,12 @@ ok "tombstones dropped once source is gone" '[[ ! -s "$NS_STORE/removed" ]]'
 
 "$store_bin" seed 5 >/dev/null
 ok "seed" '[[ $("$store_bin" list | jq length) == 5 ]]'
+
+# A damaged line is skipped, and pruning keeps everything around it.
+sed -i '2s/.*/{"key":"broken/' "$NS_STORE/archive.jsonl"
+ok "list skips a damaged line" '[[ $("$store_bin" list | jq length) == 4 ]]'
+"$store_bin" prune >/dev/null
+ok "prune keeps lines after a damaged one" '[[ $(wc -l < "$NS_STORE/archive.jsonl") == 4 ]]'
 
 ok "archive is private" '[[ $(stat -c %a "$NS_STORE") == 700 ]]'
 

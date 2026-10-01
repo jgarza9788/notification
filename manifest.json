@@ -4,7 +4,7 @@
   "name": "Notifications",
   "version": "1.0.0",
   "author": "jgarza",
-  "description": "A bell on the bar and a full-height side panel of your notifications, driven from the keyboard: arrows to select, Enter to open, / to search, d for Do Not Disturb, Shift+C twice to clear.",
+  "description": "The keyboard-first notification center: a bell on the bar and a side panel with 30 days of history. Arrows or j/k to select, Enter to open, / to search, d for Do Not Disturb, Shift+C twice to clear.",
   "license": "MIT",
   "kinds": [
     "bar-widget"

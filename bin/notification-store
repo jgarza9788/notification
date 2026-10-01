@@ -10,7 +10,9 @@
 # service's directories.
 #
 # Subcommands (all print JSON):
-#   watch          sync, then print each newly archived entry as a JSON line
+#   watch          sync, then print each newly archived entry as a JSON line,
+#                  and {"changed":true} whenever the archive or seen mark
+#                  changes (another bar instance, a remove, a clear)
 #   sync           archive anything not archived yet
 #   list [N]       newest-first array of up to N entries (default 500)
 #   remove KEY     drop one entry
@@ -111,7 +113,7 @@ ingest() {
       file: $file,
       glyph: (.glyph // "" | tostring),
       urgency: (.urgency // 1),
-      timestamp: ((.timestamp // 0) as $t | if $t > 0 then $t else ($key | split("-")[0] | tonumber) end)
+      timestamp: ((.timestamp // 0 | tonumber? // 0) as $t | if $t > 0 then $t else ($key | split("-")[0] | tonumber) end)
     }' "$file" 2>/dev/null) || return 0
   [[ -n $entry ]] || return 0
   printf '%s\n' "$entry" >> "$archive"
@@ -138,8 +140,10 @@ prune() {
   [[ -s $archive ]] || return 0
   cutoff=$(( $(now_ms) - keep_days * 86400000 ))
   # Archive order is arrival order; sort by time so the limit keeps the newest.
-  kept=$(jq -c --argjson cutoff "$cutoff" 'select(.timestamp >= $cutoff)' "$archive" 2>/dev/null |
-         jq -sc 'sort_by(.timestamp) | .[]' | tail -n "$max_items")
+  # Read line by line so one damaged line is dropped, not everything after it.
+  kept=$(jq -ncR --argjson cutoff "$cutoff" '[inputs | fromjson? | objects
+           | select((.timestamp | type) == "number" and .timestamp >= $cutoff)]
+         | sort_by(.timestamp) | .[]' "$archive" 2>/dev/null | tail -n "$max_items")
   printf '%s\n' "$kept" | grep -v '^$' > "$archive.tmp" || : > "$archive.tmp"
   # Images whose entry is gone.
   for f in "$images"/*; do
@@ -161,11 +165,18 @@ cmd_watch() {
   mkdir -p "$src_history" 2>/dev/null
   cmd_sync
   command -v inotifywait >/dev/null 2>&1 || die "inotifywait is not installed"
-  exec 3< <(inotifywait -m -q -e close_write -e moved_to --format '%w%f' "$src_dir" "$src_history" 2>/dev/null)
+  exec 3< <(inotifywait -m -q -e close_write -e moved_to --format '%w%f' \
+             "$src_dir" "$src_history" "$store" 2>/dev/null)
   watcher=$!
   trap 'kill "$watcher" 2>/dev/null' EXIT INT TERM
   local file
   while IFS= read -r file <&3; do
+    # Our own store: tell the panel to reload, so every bar instance (one per
+    # monitor) sees what any of them archived, removed, cleared or read.
+    case $file in
+      "$archive" | "$seen_file") printf '{"changed":true}\n'; continue ;;
+      "$store"/*) continue ;;
+    esac
     [[ $file == *.json ]] || continue
     with_lock ingest "$file"
     with_lock prune
@@ -176,7 +187,8 @@ cmd_list() {
   ensure_store
   local limit=${1:-500}
   [[ $limit =~ ^[0-9]+$ ]] || limit=500
-  jq -sc --argjson n "$limit" 'sort_by(-.timestamp) | .[:$n]' "$archive" 2>/dev/null || printf '[]\n'
+  jq -ncR --argjson n "$limit" '[inputs | fromjson? | objects | select((.timestamp | type) == "number")]
+    | sort_by(-.timestamp) | .[:$n]' "$archive" 2>/dev/null || printf '[]\n'
 }
 
 remove_key() {
