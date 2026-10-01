@@ -1,0 +1,94 @@
+{
+  "schemaVersion": 1,
+  "id": "jgarza.notification",
+  "name": "Notifications",
+  "version": "1.0.0",
+  "author": "jgarza",
+  "description": "A bell on the bar and a full-height side panel of your notifications, driven from the keyboard: arrows to select, Enter to open, / to search, d for Do Not Disturb, c c to clear.",
+  "license": "MIT",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "Notifications",
+    "description": "Keyboard-driven notification side panel",
+    "category": "System",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "panelWidth": 420,
+      "keepDays": 30,
+      "maxItems": 500,
+      "badge": "Count",
+      "showBody": true,
+      "icon": "",
+      "iconDnd": ""
+    },
+    "schema": [
+      {
+        "key": "panelWidth",
+        "type": "integer",
+        "label": "Panel width",
+        "description": "In the shell's spacing units.",
+        "min": 280,
+        "max": 900,
+        "step": 10,
+        "defaultValue": 420
+      },
+      {
+        "key": "keepDays",
+        "type": "integer",
+        "label": "Keep notifications for (days)",
+        "min": 1,
+        "max": 365,
+        "step": 1,
+        "defaultValue": 30
+      },
+      {
+        "key": "maxItems",
+        "type": "integer",
+        "label": "Keep at most",
+        "min": 50,
+        "max": 5000,
+        "step": 50,
+        "defaultValue": 500
+      },
+      {
+        "key": "badge",
+        "type": "enum",
+        "label": "Unread badge",
+        "options": [
+          "Count",
+          "Dot",
+          "None"
+        ],
+        "defaultValue": "Count",
+        "description": "Shown on the bell for notifications that arrived since you last opened the panel."
+      },
+      {
+        "key": "showBody",
+        "type": "boolean",
+        "label": "Show message text",
+        "defaultValue": true
+      },
+      {
+        "key": "icon",
+        "type": "string",
+        "label": "Bell icon",
+        "description": "Empty uses the default bell.",
+        "defaultValue": ""
+      },
+      {
+        "key": "iconDnd",
+        "type": "string",
+        "label": "Do Not Disturb icon",
+        "description": "Empty uses the default bell-off.",
+        "defaultValue": ""
+      }
+    ]
+  },
+  "homepage": "https://github.com/jgarza9788/notification"
+}
