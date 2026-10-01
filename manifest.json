@@ -4,7 +4,7 @@
   "name": "Notifications",
   "version": "1.0.0",
   "author": "jgarza",
-  "description": "A bell on the bar and a full-height side panel of your notifications, driven from the keyboard: arrows to select, Enter to open, / to search, d for Do Not Disturb, c c to clear.",
+  "description": "A bell on the bar and a full-height side panel of your notifications, driven from the keyboard: arrows to select, Enter to open, / to search, d for Do Not Disturb, Shift+C twice to clear.",
   "license": "MIT",
   "kinds": [
     "bar-widget"
@@ -25,7 +25,9 @@
       "badge": "Count",
       "showBody": true,
       "icon": "",
-      "iconDnd": ""
+      "iconDnd": "",
+      "iconScale": 140,
+      "animationMs": 240
     },
     "schema": [
       {
@@ -73,6 +75,26 @@
         "type": "boolean",
         "label": "Show message text",
         "defaultValue": true
+      },
+      {
+        "key": "animationMs",
+        "type": "integer",
+        "label": "Slide-in duration (ms)",
+        "description": "How long the panel takes to slide in from the right edge. 0 turns the animation off.",
+        "min": 0,
+        "max": 1000,
+        "step": 20,
+        "defaultValue": 240
+      },
+      {
+        "key": "iconScale",
+        "type": "integer",
+        "label": "Bell size (%)",
+        "description": "Size of the bell on the bar, relative to the bar's standard icon size.",
+        "min": 50,
+        "max": 250,
+        "step": 10,
+        "defaultValue": 140
       },
       {
         "key": "icon",

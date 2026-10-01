@@ -12,7 +12,7 @@ import "components"
 //
 //   ↑/↓ j/k   select           ⏎ / space   open (click) the selected one
 //   /         search           d           toggle Do Not Disturb
-//   c c       clear all        x / del     remove the selected one
+//   C C       clear all        x / del     remove the selected one
 //   esc       leave search / close         tab   next bar panel
 //
 // History comes from bin/notification-store, which archives every file the
@@ -40,6 +40,8 @@ Panel {
   readonly property bool showBody: setting("showBody", true) !== false
   readonly property string iconOn: setting("icon", "") || "\u{f009a}"       // md-bell
   readonly property string iconDnd: setting("iconDnd", "") || "\u{f009b}"   // md-bell_off
+  // Bell size on the bar, as a percentage of the bar's standard icon size.
+  readonly property int iconScale: Math.max(50, Math.min(250, Number(setting("iconScale", 140)) || 140))
 
   // ----------------------------------------------------------------- service
 
@@ -364,7 +366,7 @@ Panel {
 
   // Named so the test IPC can drive it: synthetic input doesn't reach the shell.
   function handleKey(name) {
-    if (name !== "c") { clearArmed = false; disarm.stop() }
+    if (name !== "clear") { clearArmed = false; disarm.stop() }
     switch (name) {
     case "down": move(1); return true
     case "up": move(-1); return true
@@ -375,7 +377,7 @@ Panel {
     case "enter": activate(list.currentIndex); return true
     case "search": startSearch(); return true
     case "dnd": toggleDnd(); return true
-    case "c": pressClear(); return true
+    case "clear": pressClear(); return true
     case "remove": remove(list.currentIndex); return true
     case "escape":
       if (filter !== "") endSearch(false)
@@ -398,7 +400,9 @@ Panel {
     if (k === Qt.Key_Delete || t === "x" || t === "X") return "remove"
     if (t === "/") return "search"
     if (t === "d" || t === "D") return "dnd"
-    if (t === "c" || t === "C") return "c"
+    // Capital C only, twice: destructive, so it must not fire from ordinary
+    // typing that lands here while the panel holds the keyboard.
+    if (t === "C") return "clear"
     return ""
   }
 
@@ -411,14 +415,55 @@ Panel {
     refreshLive()
   }
 
+  // ---------------------------------------------------------------- slide-in
+  //
+  // KeyboardPanel only fades its card. The card is this content's
+  // grandparent (keys -> contentHolder -> card), so a Translate is attached
+  // to it and the whole panel slides in from the right edge. If the shell
+  // ever restructures that, it falls back to sliding just the contents.
+  readonly property int slideMs: Math.max(0, Number(setting("animationMs", 240)) || 0)
+  readonly property real slideDistance: popup.contentWidth + Style.space(40)
+
+  Translate { id: slide; x: 0 }
+
+  NumberAnimation {
+    id: slideAnim
+    target: slide
+    property: "x"
+  }
+
+  function attachSlide() {
+    var card = keys.parent ? keys.parent.parent : null
+    var target = card && card !== popup && card.width === popup.contentWidth ? card : keys
+    target.transform = [slide]
+  }
+
+  function slideTo(x, easing, ms) {
+    slideAnim.stop()
+    if (slideMs <= 0) { slide.x = 0; return }
+    slideAnim.from = slide.x
+    slideAnim.to = x
+    slideAnim.duration = ms
+    slideAnim.easing.type = easing
+    slideAnim.start()
+  }
+
+  function slideIn() {
+    slideAnim.stop()
+    slide.x = slideMs > 0 ? slideDistance : 0
+    slideTo(0, Easing.OutCubic, slideMs)
+  }
+
   onOpenedChanged: {
     if (!opened) {
+      slideTo(slideDistance, Easing.InCubic, Math.round(slideMs * 0.6))
       searching = false
       search.text = ""
       filter = ""
       clearArmed = false
       return
     }
+    slideIn()
     now = Date.now()
     readMark = lastSeen
     markSeen()
@@ -441,6 +486,8 @@ Panel {
     anchors.bottom: parent.bottom
     bar: root.bar
     text: root.dnd ? root.iconDnd : root.iconOn
+    fontSize: Math.round(Style.bar.iconFont * root.iconScale / 100)
+    opticalSize: Math.round(Style.bar.iconCanvas * root.iconScale / 100)
     dimmed: root.dnd
     tooltipText: {
       if (root.dnd) return "Do Not Disturb" + (root.unread > 0 ? " · " + root.unread + " new" : "")
@@ -517,6 +564,7 @@ Panel {
       id: keys
       anchors.fill: parent
       focus: true
+      Component.onCompleted: root.attachSlide()
       Keys.priority: Keys.BeforeItem
       Keys.onPressed: function(event) {
         var name = root.keyName(event)
@@ -544,51 +592,108 @@ Panel {
 
         // ------------------------------------------------------- header
 
-        Item {
+        Column {
           id: header
           width: parent.width
-          height: Math.max(title.implicitHeight, chips.height)
-
-          PanelSectionHeader {
-            id: title
-            anchors.left: parent.left
-            anchors.verticalCenter: parent.verticalCenter
-            text: root.entries.length > 0 ? "NOTIFICATIONS  " + root.entries.length : "NOTIFICATIONS"
-            foreground: root.foreground
-            fontFamily: root.fontFamily
-          }
+          spacing: Style.space(10)
 
           Row {
-            id: chips
-            anchors.right: parent.right
-            anchors.verticalCenter: parent.verticalCenter
-            spacing: Style.space(4)
+            width: parent.width
+            spacing: Style.space(10)
 
-            PanelActionButton {
+            Text {
+              id: titleIcon
               anchors.verticalCenter: parent.verticalCenter
+              textFormat: Text.PlainText
+              text: root.dnd ? root.iconDnd : root.iconOn
+              color: Color.accent
+              font.family: root.fontFamily
+              font.pixelSize: Math.round(Style.font.iconLarge * 1.6)
+            }
+
+            Column {
+              anchors.verticalCenter: parent.verticalCenter
+              width: parent.width - titleIcon.width - closeBtn.width - parent.spacing * 2
+              spacing: 2
+
+              Text {
+                textFormat: Text.PlainText
+                text: "NOTIFICATIONS"
+                color: Color.accent
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                font.bold: true
+                font.letterSpacing: 1.6
+              }
+
+              Text {
+                width: parent.width
+                textFormat: Text.PlainText
+                text: {
+                  var n = root.entries.length
+                  var parts = [n + (n === 1 ? " notification" : " notifications")]
+                  var fresh = Model.unreadCount(root.entries, root.readMark)
+                  if (fresh > 0) parts.push(fresh + " new")
+                  if (root.filter !== "") parts.push(root.shown.length + " shown")
+                  parts.push(root.dnd ? "DND on" : "DND off")
+                  return parts.join(" \u00b7 ")
+                }
+                color: Util.alpha(root.foreground, 0.5)
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                elide: Text.ElideRight
+              }
+            }
+
+            KeyButton {
+              id: closeBtn
+              anchors.verticalCenter: parent.verticalCenter
+              keyHint: "esc"
+              tooltipText: "Close"
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              onClicked: root.close()
+            }
+          }
+
+          PanelSeparator { width: parent.width }
+
+          Row {
+            id: actions
+            width: parent.width
+            spacing: Style.space(6)
+
+            KeyButton {
               iconText: "\u{f0349}"  // md-magnify
-              tooltipText: "Search  ( / )"
-              foreground: root.searching || root.filter !== "" ? Color.accent : root.foreground
+              text: "Search"
+              keyHint: "/"
+              active: root.searching || root.filter !== ""
+              tooltipText: root.searching ? "Stop searching" : "Search notifications"
+              foreground: root.foreground
               fontFamily: root.fontFamily
               onClicked: root.searching ? root.endSearch(false) : root.startSearch()
             }
 
-            PanelActionButton {
-              anchors.verticalCenter: parent.verticalCenter
+            KeyButton {
               iconText: root.dnd ? root.iconDnd : root.iconOn
-              tooltipText: (root.dnd ? "Allow notifications" : "Do Not Disturb") + "  ( d )"
-              foreground: root.dnd ? Color.accent : root.foreground
+              text: root.dnd ? "DND on" : "DND"
+              keyHint: "d"
+              active: root.dnd
+              tooltipText: root.dnd ? "Allow notifications" : "Do Not Disturb"
+              foreground: root.foreground
               fontFamily: root.fontFamily
               onClicked: root.toggleDnd()
             }
 
-            PanelActionButton {
-              anchors.verticalCenter: parent.verticalCenter
-              iconText: "\u{f045a}"  // md-notification_clear_all
-              tooltipText: root.clearArmed ? "Click again to clear everything" : "Clear all  ( c c )"
-              foreground: root.clearArmed ? Color.urgent : root.foreground
-              fontFamily: root.fontFamily
+            KeyButton {
+              iconText: "\u{f05e9}"  // md-delete_sweep
+              text: root.clearArmed ? "Sure?" : "Clear"
+              keyHint: root.clearArmed ? "\u21e7C" : "\u21e7C \u21e7C"
+              danger: root.clearArmed
               enabled: root.entries.length > 0
+              tooltipText: root.clearArmed ? "Again to clear everything" : "Clear all notifications"
+              foreground: root.foreground
+              fontFamily: root.fontFamily
               onClicked: root.pressClear()
             }
           }
@@ -609,7 +714,7 @@ Panel {
             textFormat: Text.PlainText
             anchors.centerIn: parent
             text: root.clearArmed
-              ? "Press c again to clear " + root.entries.length + " notification" + (root.entries.length === 1 ? "" : "s")
+              ? "Press Shift+C again to clear " + root.entries.length + " notification" + (root.entries.length === 1 ? "" : "s")
               : root.iconDnd + "  Do Not Disturb is on  ·  d to turn off"
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
@@ -725,7 +830,7 @@ Panel {
           wrapMode: Text.WordWrap
           text: root.searching
             ? "type to filter · ↑↓ select · ⏎ done · esc clear"
-            : "↑↓ select · ⏎ open · / search · d dnd · c clear · x remove · esc close"
+            : "↑↓ select · ⏎ open · x remove · tab next panel"
           font.family: root.fontFamily
           font.pixelSize: Style.font.caption
           color: root.foreground
@@ -739,7 +844,7 @@ Panel {
   //
   //   omarchy-shell jgarza.notification.test state
   //   omarchy-shell jgarza.notification.test seed 20
-  //   omarchy-shell jgarza.notification.test key down|up|enter|search|dnd|c|remove|escape
+  //   omarchy-shell jgarza.notification.test key down|up|enter|search|dnd|clear|remove|escape
   IpcHandler {
     target: "jgarza.notification.test"
 
@@ -756,7 +861,9 @@ Panel {
         clearArmed: root.clearArmed,
         unread: root.unread,
         live: root.live,
-        watching: watchProc.running
+        watching: watchProc.running,
+        slideOn: keys.transform.length > 0 ? "contents" : "card",
+        slideX: slide.x
       })
     }
 

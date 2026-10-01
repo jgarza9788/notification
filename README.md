@@ -13,7 +13,7 @@ the panel from the keyboard.
 | `Enter` / `Space` | open the selected notification ("click" it) |
 | `/` | search; type to filter, `Enter` keeps the filter, `Esc` clears it |
 | `d` | toggle Do Not Disturb |
-| `c` `c` | clear everything (the first `c` asks, the second clears) |
+| `Shift+C` `Shift+C` | clear everything (the first press asks, the second clears) |
 | `x` / `Delete` | remove the selected notification |
 | `Esc` | clear the search, or close the panel |
 | `Tab` | next bar panel |
@@ -65,6 +65,8 @@ bin/notification-store list 50 | jq -r '.[] | "\(.app): \(.summary)"'
 | `maxItems` | 500 | most to keep |
 | `badge` | Count | `Count`, `Dot` or `None` |
 | `showBody` | true | show message text |
+| `animationMs` | 240 | slide-in duration; 0 turns it off |
+| `iconScale` | 140 | bell size on the bar, % of a normal bar icon |
 | `icon` / `iconDnd` | bell / bell-off | bar glyphs |
 
 ## Tests
@@ -79,6 +81,6 @@ reach the shell:
 
 ```bash
 omarchy-shell jgarza.notification.test seed 20
-omarchy-shell jgarza.notification.test key down      # up enter search dnd c remove escape
+omarchy-shell jgarza.notification.test key down      # up enter search dnd clear remove escape
 omarchy-shell jgarza.notification.test state
 ```
